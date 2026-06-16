@@ -1,0 +1,5 @@
+# Netlify config. Files are at the repo root, so no base directory is needed.
+# Or deploy directly via drag-and-drop at https://app.netlify.com/drop
+[build]
+  publish = "."
+  command = ""

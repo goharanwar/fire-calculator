@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0f766e" />
+  <meta name="description" content="Custom compound growth & withdrawal calculator with linked phases and history." />
+  <title>Compound Growth &amp; Withdrawal Calculator</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark">📈</span>
+      <div>
+        <h1>Compound Calculator</h1>
+        <p class="tagline">Grow it. Then draw it down. See both at once.</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <label class="currency-picker">
+        <span>Currency</span>
+        <select id="currencySelect" aria-label="Currency symbol">
+          <option value="Rs" selected>Rs</option>
+          <option value="₹">₹</option>
+          <option value="$">$</option>
+          <option value="£">£</option>
+          <option value="€">€</option>
+          <option value="">none</option>
+        </select>
+      </label>
+      <button id="themeToggle" class="icon-btn" title="Toggle dark / light" aria-label="Toggle theme">🌙</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="combined" role="tab">🔗 Combined</button>
+    <button class="tab" data-tab="growth" role="tab">🌱 Growth</button>
+    <button class="tab" data-tab="withdrawal" role="tab">💸 Withdrawal</button>
+    <button class="tab" data-tab="history" role="tab">🕘 History</button>
+  </nav>
+
+  <main>
+    <!-- ============ GROWTH PANEL ============ -->
+    <section class="panel" data-panel="growth">
+      <div class="grid">
+        <div class="card inputs">
+          <h2>🌱 Growth (Accumulation)</h2>
+          <div class="field">
+            <label for="g_start">Starting amount</label>
+            <div class="input-wrap"><span class="prefix curr">Rs</span><input id="g_start" type="number" min="0" step="any" value="100000" /></div>
+            <small class="hint" id="g_start_words"></small>
+          </div>
+          <div class="field">
+            <label for="g_monthly">Monthly contribution</label>
+            <div class="input-wrap"><span class="prefix curr">Rs</span><input id="g_monthly" type="number" min="0" step="any" value="10000" /></div>
+            <small class="hint" id="g_monthly_words"></small>
+          </div>
+          <div class="field">
+            <label for="g_stepup">Annual increase in contribution <span class="dim">(step-up)</span></label>
+            <div class="input-wrap"><input id="g_stepup" type="number" min="0" step="any" value="10" /><span class="suffix">%</span></div>
+          </div>
+          <div class="field">
+            <label for="g_rate">Expected annual return</label>
+            <div class="input-wrap"><input id="g_rate" type="number" step="any" value="15" /><span class="suffix">%</span></div>
+          </div>
+          <div class="field">
+            <label for="g_years">Number of years</label>
+            <div class="input-wrap"><input id="g_years" type="number" min="0" max="100" step="any" value="20" /><span class="suffix">yrs</span></div>
+          </div>
+          <div class="field">
+            <label for="g_timing">Contribution timing</label>
+            <select id="g_timing">
+              <option value="end" selected>End of month (ordinary)</option>
+              <option value="begin">Start of month (annuity-due)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card results" id="g_results">
+          <h2>Result</h2>
+          <div class="stat-grid" id="g_stats"></div>
+          <div class="chart-block">
+            <canvas id="g_chart" height="240"></canvas>
+            <div class="legend" id="g_legend"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card table-card">
+        <div class="table-head"><h3>Year-by-year breakdown</h3></div>
+        <div class="table-scroll"><table id="g_table"></table></div>
+      </div>
+    </section>
+
+    <!-- ============ WITHDRAWAL PANEL ============ -->
+    <section class="panel hidden" data-panel="withdrawal">
+      <div class="grid">
+        <div class="card inputs">
+          <h2>💸 Withdrawal (Decumulation)</h2>
+          <div class="field link-field">
+            <label class="switch">
+              <input type="checkbox" id="w_link" checked />
+              <span class="slider"></span>
+            </label>
+            <div>
+              <strong>Start from Growth result</strong>
+              <small class="hint">When on, starting corpus = your Growth final value.</small>
+            </div>
+          </div>
+          <div class="field">
+            <label for="w_start">Starting corpus</label>
+            <div class="input-wrap"><span class="prefix curr">Rs</span><input id="w_start" type="number" min="0" step="any" value="0" /></div>
+            <small class="hint" id="w_start_words"></small>
+          </div>
+          <div class="field">
+            <label for="w_monthly">Monthly withdrawal</label>
+            <div class="input-wrap"><span class="prefix curr">Rs</span><input id="w_monthly" type="number" min="0" step="any" value="50000" /></div>
+            <small class="hint" id="w_monthly_words"></small>
+          </div>
+          <div class="field">
+            <label for="w_stepup">Annual increase in withdrawal <span class="dim">(inflation)</span></label>
+            <div class="input-wrap"><input id="w_stepup" type="number" min="0" step="any" value="7" /><span class="suffix">%</span></div>
+          </div>
+          <div class="field">
+            <label for="w_rate">Expected annual return</label>
+            <div class="input-wrap"><input id="w_rate" type="number" step="any" value="10" /><span class="suffix">%</span></div>
+          </div>
+          <div class="field">
+            <label for="w_timing">Withdrawal timing</label>
+            <select id="w_timing">
+              <option value="end" selected>End of month</option>
+              <option value="begin">Start of month</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card results" id="w_results">
+          <h2>Result</h2>
+          <div class="stat-grid" id="w_stats"></div>
+          <div class="chart-block">
+            <canvas id="w_chart" height="240"></canvas>
+            <div class="legend" id="w_legend"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card table-card">
+        <div class="table-head"><h3>Year-by-year drawdown</h3></div>
+        <div class="table-scroll"><table id="w_table"></table></div>
+      </div>
+    </section>
+
+    <!-- ============ COMBINED PANEL ============ -->
+    <section class="panel" data-panel="combined">
+      <p class="combined-note">Edit either side — the <strong>Growth final value flows straight into Withdrawal</strong> as the starting corpus (unless you unlink it). This is the whole point: see "how big it grows" and "how long it lasts" together.</p>
+      <div class="combined-grid">
+        <div class="combined-col">
+          <div class="card inputs compact">
+            <h2>🌱 Growth</h2>
+            <div class="field-row">
+              <label for="cg_start">Starting amount</label>
+              <div class="input-wrap"><span class="prefix curr">Rs</span><input id="cg_start" type="number" min="0" step="any" /></div>
+            </div>
+            <div class="field-row">
+              <label for="cg_monthly">Monthly contribution</label>
+              <div class="input-wrap"><span class="prefix curr">Rs</span><input id="cg_monthly" type="number" min="0" step="any" /></div>
+            </div>
+            <div class="field-row">
+              <label for="cg_stepup">Contribution step-up</label>
+              <div class="input-wrap"><input id="cg_stepup" type="number" min="0" step="any" /><span class="suffix">%</span></div>
+            </div>
+            <div class="field-row">
+              <label for="cg_rate">Annual return</label>
+              <div class="input-wrap"><input id="cg_rate" type="number" step="any" /><span class="suffix">%</span></div>
+            </div>
+            <div class="field-row">
+              <label for="cg_years">Years</label>
+              <div class="input-wrap"><input id="cg_years" type="number" min="0" step="any" /><span class="suffix">yrs</span></div>
+            </div>
+          </div>
+          <div class="card mini-result" id="cg_mini"></div>
+        </div>
+
+        <div class="flow-arrow" title="Growth final value becomes the withdrawal corpus">
+          <span class="arrow-glyph">→</span>
+          <small>feeds</small>
+        </div>
+
+        <div class="combined-col">
+          <div class="card inputs compact">
+            <h2>💸 Withdrawal</h2>
+            <div class="field-row link-row">
+              <label class="switch sm">
+                <input type="checkbox" id="cw_link" checked />
+                <span class="slider"></span>
+              </label>
+              <span>Use Growth result as corpus</span>
+            </div>
+            <div class="field-row">
+              <label for="cw_start">Starting corpus</label>
+              <div class="input-wrap"><span class="prefix curr">Rs</span><input id="cw_start" type="number" min="0" step="any" /></div>
+            </div>
+            <div class="field-row">
+              <label for="cw_monthly">Monthly withdrawal</label>
+              <div class="input-wrap"><span class="prefix curr">Rs</span><input id="cw_monthly" type="number" min="0" step="any" /></div>
+            </div>
+            <div class="field-row">
+              <label for="cw_stepup">Withdrawal step-up</label>
+              <div class="input-wrap"><input id="cw_stepup" type="number" min="0" step="any" /><span class="suffix">%</span></div>
+            </div>
+            <div class="field-row">
+              <label for="cw_rate">Annual return</label>
+              <div class="input-wrap"><input id="cw_rate" type="number" step="any" /><span class="suffix">%</span></div>
+            </div>
+          </div>
+          <div class="card mini-result" id="cw_mini"></div>
+        </div>
+      </div>
+
+      <div class="card chart-card">
+        <h3>Full journey — accumulation then drawdown</h3>
+        <canvas id="c_chart" height="280"></canvas>
+        <div class="legend" id="c_legend"></div>
+      </div>
+
+      <div class="save-bar">
+        <input id="saveLabel" type="text" placeholder="Label this scenario (e.g. Retirement plan A)" maxlength="60" />
+        <button id="saveBtn" class="primary">💾 Save to history</button>
+      </div>
+    </section>
+
+    <!-- ============ HISTORY PANEL ============ -->
+    <section class="panel hidden" data-panel="history">
+      <div class="card">
+        <div class="history-head">
+          <h2>🕘 History</h2>
+          <div class="history-actions">
+            <button id="exportBtn" class="ghost">⬇ Export JSON</button>
+            <button id="importBtn" class="ghost">⬆ Import</button>
+            <input id="importFile" type="file" accept="application/json" hidden />
+            <button id="clearHistoryBtn" class="danger">🗑 Clear all</button>
+          </div>
+        </div>
+        <p class="hint">Saved scenarios live in your browser's local storage — private to this device. Click one to reload it into the Combined view.</p>
+        <div id="historyList" class="history-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span>All calculations run locally in your browser. Nothing is uploaded. Estimates only — not financial advice.</span>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "fire-calculator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Custom compound growth & withdrawal (FIRE) calculator with linked phases, charts, and local history.",
+  "scripts": {
+    "test": "node test.js",
+    "serve": "node serve.js"
+  }
+}
