@@ -433,11 +433,15 @@
     });
     LINK_IDS.forEach(function (id) { var el = $(id); if (el) el.checked = state.link; });
 
-    // hint words
+    // hint words — individual tabs and combined view
     setHint("g_start_words", state.growth.start);
     setHint("g_monthly_words", state.growth.monthly);
     setHint("w_start_words", state.withdrawal.start);
     setHint("w_monthly_words", state.withdrawal.monthly);
+    setHint("cg_start_words", state.growth.start);
+    setHint("cg_monthly_words", state.growth.monthly);
+    setHint("cw_start_words", state.withdrawal.start);
+    setHint("cw_monthly_words", state.withdrawal.monthly);
   }
   function setHint(id, v) { var el = $(id); if (el) el.textContent = wordsHint(num(v)); }
 
