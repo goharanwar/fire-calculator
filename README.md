@@ -18,9 +18,10 @@ file + one JS file. Everything runs in your browser and saves to local storage.
 ## Features
 
 - **🔗 Combined view** — growth on the left, withdrawal on the right, the growth
-  final value flowing straight into the withdrawal corpus. A single chart shows
-  the full journey: the accumulation curve in teal, the drawdown curve in red,
-  meeting at the moment you stop investing and start withdrawing.
+  final value flowing straight into the withdrawal corpus. **Two side-by-side
+  charts** (accumulation in teal, drawdown in red), each self-scaled so a
+  never-depleting or very long drawdown can't squash the growth curve. Key
+  figures repeat in Cr / Lakh short form, just like the individual tabs.
 - **🌱 Growth tab** — starting amount, monthly contribution, **annual step-up %**
   (your contribution grows each year), expected annual return, number of years,
   and contribution timing (start/end of month). Shows final value, total
@@ -28,13 +29,25 @@ file + one JS file. Everything runs in your browser and saves to local storage.
 - **💸 Withdrawal tab** — starting corpus (linked or manual), monthly withdrawal,
   **annual withdrawal step-up %** (inflation), expected return. Tells you exactly
   **how long the money lasts** (or that it never depletes), total withdrawn, and
-  a year-by-year drawdown table.
-- **🕘 History** — save any scenario with a label; it's stored in local storage.
-  Click to reload it, delete individual entries, or **export / import** the whole
-  history as JSON to move it between devices.
-- **Quality-of-life** — light/dark theme, switchable currency symbol
-  (Rs / ₹ / $ / £ / € / none), Indian-style short forms (K / L / Cr), inputs
-  remembered between visits, fully responsive for phone & desktop.
+  a year-by-year drawdown table. Open-ended (never-depleting) runs are shown over
+  a 40-year horizon.
+- **🕌 Zakat** — optional **2.5 % annual deduction** (rate editable) taken from the
+  balance at each year-end, in both phases. Total Zakat paid is shown per phase so
+  you can see its drag on growth and on how long the corpus lasts.
+- **💱 Live currency conversion** — pick Rs (PKR) / ₹ (INR) / $ (USD) / £ (GBP) /
+  € (EUR) and all amounts **convert automatically** at the live exchange rate
+  (via the keyless [open.er-api.com](https://www.exchangerate-api.com/docs/free));
+  the rate used and its date are shown under the picker. Rates are cached for 12h,
+  and if the network is unavailable the symbol just switches without converting.
+- **💾 Save & auto-save** — a **Save** button sits at the top of the Combined view;
+  scenarios are also **auto-saved** to a single rolling draft after ~15s idle, so
+  you never lose where you were. Each entry stores its own currency and Zakat
+  settings.
+- **🕘 History** — saved scenarios live in local storage. Click to reload, delete
+  individual entries, or **export / import** the whole history as JSON to move it
+  between devices.
+- **Quality-of-life** — light/dark theme, Indian-style short forms (K / L / Cr),
+  inputs remembered between visits, fully responsive for phone & desktop.
 
 > Estimates only — not financial advice. Markets don't grow at a fixed rate.
 
@@ -54,10 +67,15 @@ formula, so step-ups and timing behave correctly.
 - *End of month:* `balance = balance × (1 + i) − withdrawal`
 - *Start of month:* `balance = (balance − withdrawal) × (1 + i)`
 - The withdrawal increases by the step-up % each year. If returns out-pace
-  withdrawals forever, it reports **"Never depletes."**
+  withdrawals forever, it reports **"Never depletes"** and totals are reported
+  over the 40-year shown horizon.
+
+**Zakat** (when enabled): at each year-end, `balance −= balance × rate%` (default
+2.5 %), applied after that year's contributions/withdrawals, in both phases.
 
 These engines are unit-tested against the standard compound-interest and
-ordinary/annuity-due future-value formulas — see `test.js`.
+ordinary/annuity-due future-value formulas, plus Zakat and horizon behaviour —
+see `test.js`.
 
 ```bash
 npm test        # runs the engine sanity tests under Node

@@ -20,15 +20,16 @@
     </div>
     <div class="header-actions">
       <label class="currency-picker">
-        <span>Currency</span>
+        <span>Currency <span class="dim">(auto-converts)</span></span>
         <select id="currencySelect" aria-label="Currency symbol">
-          <option value="Rs" selected>Rs</option>
-          <option value="₹">₹</option>
-          <option value="$">$</option>
-          <option value="£">£</option>
-          <option value="€">€</option>
+          <option value="Rs" selected>Rs — PKR</option>
+          <option value="₹">₹ — INR</option>
+          <option value="$">$ — USD</option>
+          <option value="£">£ — GBP</option>
+          <option value="€">€ — EUR</option>
           <option value="">none</option>
         </select>
+        <small class="fx-note" id="fxNote"></small>
       </label>
       <button id="themeToggle" class="icon-btn" title="Toggle dark / light" aria-label="Toggle theme">🌙</button>
     </div>
@@ -40,6 +41,18 @@
     <button class="tab" data-tab="withdrawal" role="tab">💸 Withdrawal</button>
     <button class="tab" data-tab="history" role="tab">🕘 History</button>
   </nav>
+
+  <div class="toolbar">
+    <label class="zakat-toggle" title="Deduct Zakat from the balance at each year-end, in both phases">
+      <span class="switch sm"><input type="checkbox" id="zakatToggle" /><span class="slider"></span></span>
+      <span>🕌 Apply Zakat</span>
+    </label>
+    <div class="input-wrap zakat-rate-wrap">
+      <input id="zakatRate" type="number" min="0" step="any" aria-label="Zakat rate percent" />
+      <span class="suffix">% / yr</span>
+    </div>
+    <span class="zakat-hint dim">2.5% of wealth, deducted every year-end</span>
+  </div>
 
   <main>
     <!-- ============ GROWTH PANEL ============ -->
@@ -152,6 +165,11 @@
 
     <!-- ============ COMBINED PANEL ============ -->
     <section class="panel" data-panel="combined">
+      <div class="save-bar">
+        <input id="saveLabel" type="text" placeholder="Label this scenario (e.g. Retirement plan A)" maxlength="60" />
+        <button id="saveBtn" class="primary">💾 Save</button>
+        <span id="autoStatus" class="auto-status" title="Drafts auto-save as you edit"></span>
+      </div>
       <p class="combined-note">Edit either side — the <strong>Growth final value flows straight into Withdrawal</strong> as the starting corpus (unless you unlink it). This is the whole point: see "how big it grows" and "how long it lasts" together.</p>
       <div class="combined-grid">
         <div class="combined-col">
@@ -217,15 +235,17 @@
         </div>
       </div>
 
-      <div class="card chart-card">
-        <h3>Full journey — accumulation then drawdown</h3>
-        <canvas id="c_chart" height="280"></canvas>
-        <div class="legend" id="c_legend"></div>
-      </div>
-
-      <div class="save-bar">
-        <input id="saveLabel" type="text" placeholder="Label this scenario (e.g. Retirement plan A)" maxlength="60" />
-        <button id="saveBtn" class="primary">💾 Save to history</button>
+      <div class="combined-charts">
+        <div class="card chart-card">
+          <h3>🌱 Accumulation</h3>
+          <canvas id="c_chart_growth" height="240"></canvas>
+          <div class="legend" id="cg_chart_legend"></div>
+        </div>
+        <div class="card chart-card">
+          <h3>💸 Drawdown</h3>
+          <canvas id="c_chart_withdraw" height="240"></canvas>
+          <div class="legend" id="cw_chart_legend"></div>
+        </div>
       </div>
     </section>
 

@@ -7,14 +7,24 @@
 
   var LS_STATE = "cc_state_v1";
   var LS_HISTORY = "cc_history_v1";
-  var MONTHS_CAP = 100 * 12; // withdrawal simulation safety cap (100 years)
+  var LS_FX = "cc_fx_v1";
+  var MONTHS_CAP = 100 * 12;          // withdrawal simulation safety cap (100 years)
+  var SUSTAIN_DISPLAY_YEARS = 40;     // chart horizon when the corpus never depletes
+  var AUTOSAVE_MS = 15000;            // idle delay before a rolling auto-save
+  var FX_TTL_MS = 12 * 3600 * 1000;   // re-fetch exchange rates after 12h
+  var FX_API = "https://open.er-api.com/v6/latest/";
+
+  // Currency symbol -> ISO code (for live conversion). "none" has no code.
+  var CURRENCY_ISO = { "Rs": "PKR", "₹": "INR", "$": "USD", "£": "GBP", "€": "EUR", "": null };
 
   /* ----------------------------- State ---------------------------------- */
   var state = {
     growth: { start: 100000, monthly: 10000, stepup: 10, rate: 15, years: 20, timing: "end" },
     withdrawal: { start: 0, monthly: 50000, stepup: 7, rate: 10, timing: "end" },
-    link: true,         // withdrawal corpus follows growth result
+    link: true,                       // withdrawal corpus follows growth result
+    zakat: { enabled: true, rate: 2.5 }, // annual 2.5% wealth deduction at year-end
     currency: "Rs",
+    fxNote: "",                       // human-readable last conversion rate
     theme: "light",
     tab: "combined",
   };
@@ -69,6 +79,12 @@
     if (!n) return "";
     return "≈ " + (state.currency ? state.currency + " " : "") + abbrev(n);
   }
+  // Full amount with a Cr/L short form appended once it's large enough to help.
+  function fmtAbbrev(n) {
+    var full = fmtCurrency(n);
+    if (Math.abs(n) >= 1e5) return full + ' <span class="dim">(' + abbrev(n) + ")</span>";
+    return full;
+  }
   function monthsToText(m) {
     var y = Math.floor(m / 12), mo = m % 12;
     var parts = [];
@@ -79,12 +95,18 @@
   }
 
   /* ------------------------ Financial engines --------------------------- */
+  // Effective annual Zakat rate, applied to the balance at each year-end.
+  function zakatRate(z) { return z && z.enabled ? (num(z.rate) / 100) : 0; }
+
   // Growth / accumulation, simulated month-by-month with annual step-up.
-  function computeGrowth(g) {
+  // Optional `z` = {enabled, rate} deducts Zakat from the balance each year-end.
+  function computeGrowth(g, z) {
     var i = g.rate / 100 / 12;
+    var zr = zakatRate(z);
     var totalMonths = Math.max(0, Math.round(g.years * 12));
     var bal = num(g.start);
     var invested = num(g.start);
+    var zakatPaid = 0;
     var series = [bal];
     var yearly = [];
     for (var m = 1; m <= totalMonths; m++) {
@@ -93,15 +115,18 @@
       if (g.timing === "begin") bal = (bal + contrib) * (1 + i);
       else bal = bal * (1 + i) + contrib;
       invested += contrib;
+      var zakatThisYear = 0;
+      if (zr && m % 12 === 0) { zakatThisYear = bal * zr; bal -= zakatThisYear; zakatPaid += zakatThisYear; }
       series.push(bal);
       if (m % 12 === 0 || m === totalMonths) {
-        yearly.push({ year: Math.ceil(m / 12), balance: bal, invested: invested, profit: bal - invested });
+        yearly.push({ year: Math.ceil(m / 12), balance: bal, invested: invested, profit: bal - invested, zakat: zakatThisYear });
       }
     }
     return {
       finalBalance: bal,
       totalInvested: invested,
       totalProfit: bal - invested,
+      zakatPaid: zakatPaid,
       months: totalMonths,
       series: series,
       yearly: yearly,
@@ -109,31 +134,38 @@
   }
 
   // Withdrawal / decumulation. Returns how long the corpus lasts.
-  function computeWithdrawal(w) {
+  // Optional `z` = {enabled, rate} deducts Zakat from the balance each year-end.
+  function computeWithdrawal(w, z) {
     var i = w.rate / 100 / 12;
+    var zr = zakatRate(z);
     var bal = num(w.start);
     var series = [bal];
     var yearly = [];
     var totalWithdrawn = 0;
+    var zakatPaid = 0;
     var depletedMonth = null;
     var startBal = bal;
+    var horizonMonth = SUSTAIN_DISPLAY_YEARS * 12;
+    // Cumulative totals frozen at the display horizon, so a never-depleting run
+    // reports figures that match the (capped) chart rather than the 100y cap.
+    var withdrawnAtHorizon = 0, zakatAtHorizon = 0, balAtHorizon = bal;
 
     for (var m = 1; m <= MONTHS_CAP; m++) {
       var yearIdx = Math.floor((m - 1) / 12);
       var wd = num(w.monthly) * Math.pow(1 + w.stepup / 100, yearIdx);
       if (w.timing === "begin") {
-        var avail = bal;
-        var taken = Math.min(wd, Math.max(avail, 0));
-        totalWithdrawn += taken;
+        totalWithdrawn += Math.min(wd, Math.max(bal, 0));
         bal = (bal - wd) * (1 + i);
       } else {
         bal = bal * (1 + i);
-        var taken2 = Math.min(wd, Math.max(bal, 0));
-        totalWithdrawn += taken2;
+        totalWithdrawn += Math.min(wd, Math.max(bal, 0));
         bal = bal - wd;
       }
+      // Zakat at year-end, on whatever corpus survives the year's withdrawals.
+      if (zr && m % 12 === 0 && bal > 0) { var zk = bal * zr; bal -= zk; zakatPaid += zk; }
       series.push(Math.max(bal, 0));
       if (m % 12 === 0) yearly.push({ year: m / 12, balance: bal });
+      if (m === horizonMonth) { withdrawnAtHorizon = totalWithdrawn; zakatAtHorizon = zakatPaid; balAtHorizon = bal; }
       if (bal <= 0) { depletedMonth = m; break; }
     }
     if (depletedMonth && (depletedMonth % 12 !== 0)) {
@@ -141,14 +173,26 @@
     }
 
     var sustainable = depletedMonth === null;
+    // For charts, cap an open-ended (never-depleting) run to a readable horizon.
+    var displaySeries = series;
+    var displayCapped = false;
+    if (sustainable && series.length > horizonMonth + 1) {
+      displaySeries = series.slice(0, horizonMonth + 1);
+      displayCapped = true;
+    }
     return {
       startBalance: startBal,
       lastsMonths: depletedMonth || MONTHS_CAP,
       depleted: depletedMonth !== null,
       sustainable: sustainable,
-      endBalance: sustainable ? bal : 0,
-      totalWithdrawn: totalWithdrawn,
+      // When sustainable, report figures over the shown horizon (not the 100y cap).
+      endBalance: sustainable ? balAtHorizon : 0,
+      totalWithdrawn: sustainable ? withdrawnAtHorizon : totalWithdrawn,
+      zakatPaid: sustainable ? zakatAtHorizon : zakatPaid,
+      horizonYears: SUSTAIN_DISPLAY_YEARS,
       series: series,
+      displaySeries: displaySeries,
+      displayCapped: displayCapped,
       yearly: yearly,
     };
   }
@@ -179,19 +223,23 @@
   }
 
   function render() {
-    var g = computeGrowth(state.growth);
+    var g = computeGrowth(state.growth, state.zakat);
 
     // link: withdrawal corpus follows growth final value
     if (state.link) state.withdrawal.start = g.finalBalance;
-    var w = computeWithdrawal(state.withdrawal);
+    var w = computeWithdrawal(state.withdrawal, state.zakat);
 
     var GC = cssVar("--growth"), WC = cssVar("--withdraw");
+    var zOn = state.zakat.enabled;
+    var zPct = trim(num(state.zakat.rate));
 
     /* ---- Growth panel ---- */
-    $("g_stats").innerHTML =
+    var gStats =
       statBox("Final value", fmtCurrency(g.finalBalance), wordsHint(g.finalBalance), "big growth") +
       statBox("Total invested", fmtCurrency(g.totalInvested), null, "") +
       statBox("Total profit", fmtCurrency(g.totalProfit), g.totalInvested ? "+" + Math.round((g.totalProfit / g.totalInvested) * 100) + "% on capital" : "", "growth");
+    if (zOn) gStats += statBox("Zakat paid (" + zPct + "%)", fmtCurrency(g.zakatPaid), "deducted each year-end", "zakat");
+    $("g_stats").innerHTML = gStats;
     drawChart($("g_chart"),
       [{ values: g.series, color: GC, fill: true }],
       { totalYears: state.growth.years });
@@ -199,66 +247,61 @@
     renderGrowthTable(g);
 
     /* ---- Withdrawal panel ---- */
-    var w_start_el = $("w_start"), cw_start_el = $("cw_start");
-    [w_start_el, cw_start_el].forEach(function (el) { if (el) el.disabled = state.link; });
+    [$("w_start"), $("cw_start")].forEach(function (el) { if (el) el.disabled = state.link; });
 
-    var lastsValue = w.sustainable
-      ? "Never depletes 🎉"
-      : monthsToText(w.lastsMonths);
-    var lastsSub = w.sustainable
-      ? "Returns out-pace withdrawals at this rate"
-      : "until the corpus hits zero";
-    $("w_stats").innerHTML =
+    var lastsValue = w.sustainable ? "Never depletes 🎉" : monthsToText(w.lastsMonths);
+    var lastsSub = w.sustainable ? "Returns out-pace withdrawals at this rate" : "until the corpus hits zero";
+    var wStats =
       statBox("Money lasts", lastsValue, lastsSub, "big " + (w.sustainable ? "ok" : "warn")) +
       statBox("Starting corpus", fmtCurrency(w.startBalance), state.link ? "linked from Growth" : "manual", "") +
-      statBox("Total withdrawn", fmtCurrency(w.totalWithdrawn), null, "withdraw") +
-      statBox(w.sustainable ? "Balance @ 100y" : "First-year withdrawal",
-        w.sustainable ? fmtCurrency(w.endBalance) : fmtCurrency(num(state.withdrawal.monthly) * 12),
-        null, "");
+      statBox("Total withdrawn", fmtCurrency(w.totalWithdrawn), null, "withdraw");
+    if (zOn) wStats += statBox("Zakat paid (" + zPct + "%)", fmtCurrency(w.zakatPaid), w.sustainable ? "over " + SUSTAIN_DISPLAY_YEARS + "y shown" : "until depletion", "zakat");
+    else wStats += statBox("First-year withdrawal", fmtCurrency(num(state.withdrawal.monthly) * 12), null, "");
+    $("w_stats").innerHTML = wStats;
     drawChart($("w_chart"),
-      [{ values: w.series, color: WC, fill: true }],
-      { totalYears: w.series.length / 12 });
-    $("w_legend").innerHTML = legendHTML([{ color: WC, label: "Remaining corpus" }]);
+      [{ values: w.displaySeries, color: WC, fill: true }],
+      { totalYears: w.displaySeries.length / 12 });
+    $("w_legend").innerHTML = legendHTML([{ color: WC, label: "Remaining corpus" + (w.displayCapped ? " · first " + SUSTAIN_DISPLAY_YEARS + " yrs (never depletes)" : "") }]);
     renderWithdrawalTable(w);
 
     /* ---- Combined panel ---- */
-    var cw_start_el2 = $("cw_start");
-    if (cw_start_el2) cw_start_el2.disabled = state.link;
+    if ($("cw_start")) $("cw_start").disabled = state.link;
+    var zNote = zOn ? '<div class="mini-row"><span>Zakat paid</span><b>' : "";
 
     $("cg_mini").className = "card mini-result growth";
     $("cg_mini").innerHTML =
-      '<div class="mini-title">After ' + trim(state.growth.years) + ' years you have</div>' +
+      '<div class="mini-title">After ' + trim(state.growth.years) + " years you have</div>" +
       '<div class="mini-main">' + fmtCurrency(g.finalBalance) + "</div>" +
-      '<div class="mini-row"><span>Invested</span><b>' + fmtCurrency(g.totalInvested) + "</b></div>" +
-      '<div class="mini-row"><span>Profit</span><b>' + fmtCurrency(g.totalProfit) + "</b></div>";
+      '<div class="mini-sub">' + wordsHint(g.finalBalance) + "</div>" +
+      '<div class="mini-row"><span>Invested</span><b>' + fmtAbbrev(g.totalInvested) + "</b></div>" +
+      '<div class="mini-row"><span>Profit</span><b>' + fmtAbbrev(g.totalProfit) + "</b></div>" +
+      (zOn ? '<div class="mini-row"><span>Zakat paid</span><b>' + fmtAbbrev(g.zakatPaid) + "</b></div>" : "");
 
     $("cw_mini").className = "card mini-result withdraw";
     $("cw_mini").innerHTML =
       '<div class="mini-title">Drawing ' + fmtCurrency(num(state.withdrawal.monthly)) + "/mo, it lasts</div>" +
       '<div class="mini-main">' + lastsValue + "</div>" +
-      '<div class="mini-row"><span>From corpus</span><b>' + fmtCurrency(w.startBalance) + "</b></div>" +
-      '<div class="mini-row"><span>Total drawn</span><b>' + fmtCurrency(w.totalWithdrawn) + "</b></div>";
+      '<div class="mini-sub">from ' + wordsHint(w.startBalance).replace("≈ ", "") + " corpus</div>" +
+      '<div class="mini-row"><span>From corpus</span><b>' + fmtAbbrev(w.startBalance) + "</b></div>" +
+      '<div class="mini-row"><span>Total drawn</span><b>' + fmtAbbrev(w.totalWithdrawn) + "</b></div>" +
+      (zOn ? '<div class="mini-row"><span>Zakat paid</span><b>' + fmtAbbrev(w.zakatPaid) + "</b></div>" : "");
 
-    // stitched journey chart: accumulation, then drawdown continuing from final value.
-    // Two datasets share one x-axis; nulls break each line so the phases get
-    // distinct colours, meeting exactly at the transition marker.
-    var marker = g.series.length - 1;
-    var combined = g.series.concat(w.series.slice(1)); // drop duplicate join point
-    var accVals = [], decVals = [];
-    for (var k = 0; k < combined.length; k++) {
-      accVals.push(k <= marker ? combined[k] : null);
-      decVals.push(k >= marker ? combined[k] : null);
-    }
-    drawChart($("c_chart"),
-      [{ values: accVals, color: GC, fill: true }, { values: decVals, color: WC, fill: true }],
-      { totalYears: combined.length / 12, markerIndex: marker });
-    $("c_legend").innerHTML = legendHTML([
-      { color: GC, label: "Accumulation" },
-      { color: WC, label: "Drawdown" },
-    ]);
+    // Two separate charts (accumulation + drawdown), each self-scaled, so a
+    // never-depleting or very-long drawdown can't squash the growth phase.
+    drawChart($("c_chart_growth"),
+      [{ values: g.series, color: GC, fill: true }],
+      { totalYears: state.growth.years });
+    $("cg_chart_legend").innerHTML = legendHTML([{ color: GC, label: "Portfolio value" }]);
 
+    drawChart($("c_chart_withdraw"),
+      [{ values: w.displaySeries, color: WC, fill: true }],
+      { totalYears: w.displaySeries.length / 12 });
+    $("cw_chart_legend").innerHTML = legendHTML([{ color: WC, label: "Remaining corpus" + (w.displayCapped ? " · first " + SUSTAIN_DISPLAY_YEARS + " yrs" : "") }]);
+
+    renderZakatBar();
     syncInputs();
     saveState();
+    scheduleAutoSave();
   }
 
   /* -------------------------- Canvas charts ----------------------------- */
@@ -267,10 +310,15 @@
   function drawChart(canvas, datasets, opts) {
     opts = opts || {};
     var dpr = window.devicePixelRatio || 1;
+    // Capture the intended CSS height ONCE — setting canvas.height reflects back to
+    // the height attribute, so re-reading it would compound by dpr every render.
+    if (canvas._cssH == null) canvas._cssH = parseInt(canvas.getAttribute("height"), 10) || 240;
+    var cssH = canvas._cssH;
+    canvas.style.width = "100%";
+    canvas.style.height = cssH + "px"; // pin display height; bitmap is dpr-scaled below
     var cssW = canvas.clientWidth || canvas.parentElement.clientWidth || 600;
-    var cssH = parseInt(canvas.getAttribute("height"), 10) || 240;
-    canvas.width = Math.floor(cssW * dpr);
-    canvas.height = Math.floor(cssH * dpr);
+    canvas.width = Math.max(1, Math.floor(cssW * dpr));
+    canvas.height = Math.max(1, Math.floor(cssH * dpr));
     var ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
@@ -356,7 +404,9 @@
 
   function renderWithdrawalTable(w) {
     var html = "<thead><tr><th>Year</th><th>Remaining corpus</th></tr></thead><tbody>";
-    var rows = w.yearly.slice(0, 60);
+    // For a never-depleting run, stop the table at the shown horizon too.
+    var maxRows = w.sustainable ? SUSTAIN_DISPLAY_YEARS : 60;
+    var rows = w.yearly.slice(0, maxRows);
     rows.forEach(function (r) {
       var cls = r.balance <= 0 ? "col-neg" : "";
       html += "<tr><td>" + r.year + '</td><td class="' + cls + '">' +
@@ -434,7 +484,9 @@
       if (s.growth) Object.assign(state.growth, s.growth);
       if (s.withdrawal) Object.assign(state.withdrawal, s.withdrawal);
       if (typeof s.link === "boolean") state.link = s.link;
+      if (s.zakat) Object.assign(state.zakat, s.zakat);
       if (s.currency != null) state.currency = s.currency;
+      if (s.fxNote != null) state.fxNote = s.fxNote;
       if (s.theme) state.theme = s.theme;
       if (s.tab) state.tab = s.tab;
     } catch (e) {}
@@ -448,44 +500,64 @@
   }
 
   /* ----------------------------- History UI ----------------------------- */
-  function saveScenario() {
-    var label = ($("saveLabel").value || "").trim() || "Scenario " + (getHistory().length + 1);
-    var g = computeGrowth(state.growth);
+  // Format an amount in a specific saved currency (history items keep their own).
+  function fmtCur(n, sym) {
+    if (!isFinite(n)) n = 0;
+    var s = sym ? sym + " " : "";
+    return (n < 0 ? "-" : "") + s + Math.abs(Math.round(n)).toLocaleString("en-IN");
+  }
+  function buildScenario(label, auto) {
+    var g = computeGrowth(state.growth, state.zakat);
     if (state.link) state.withdrawal.start = g.finalBalance;
-    var w = computeWithdrawal(state.withdrawal);
-    var item = {
+    var w = computeWithdrawal(state.withdrawal, state.zakat);
+    return {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       label: label,
+      auto: !!auto,
       date: new Date().toISOString(),
+      currency: state.currency,
       growth: Object.assign({}, state.growth),
       withdrawal: Object.assign({}, state.withdrawal),
+      zakat: Object.assign({}, state.zakat),
       link: state.link,
       summary: {
         finalBalance: g.finalBalance,
         invested: g.totalInvested,
+        zakatPaid: g.zakatPaid + w.zakatPaid,
         lasts: w.sustainable ? "Never depletes" : monthsToText(w.lastsMonths),
       },
     };
+  }
+  function saveScenario() {
+    var permanentCount = getHistory().filter(function (x) { return !x.auto; }).length;
+    var label = ($("saveLabel").value || "").trim() || "Scenario " + (permanentCount + 1);
     var h = getHistory();
-    h.unshift(item);
+    h.unshift(buildScenario(label, false));
     setHistory(h);
+    lastSavedSig = scenarioSig();
     $("saveLabel").value = "";
     renderHistory();
+    setAutoStatus("Saved");
     toast("Saved “" + label + "”");
   }
 
   function renderHistory() {
     var h = getHistory();
     var box = $("historyList");
-    if (!h.length) { box.innerHTML = '<div class="empty">No saved scenarios yet. Build one in Combined and hit “Save to history”.</div>'; return; }
+    if (!h.length) { box.innerHTML = '<div class="empty">No saved scenarios yet. Tap “Save” on the Combined tab — or just keep editing; it auto-saves a draft.</div>'; return; }
     box.innerHTML = h.map(function (it) {
       var d = new Date(it.date);
-      return '<div class="history-item" data-id="' + it.id + '">' +
+      var sym = it.currency != null ? it.currency : state.currency;
+      var badge = it.auto ? '<span class="hi-badge">Auto</span>' : "";
+      var zRow = (it.summary.zakatPaid != null && it.summary.zakatPaid > 0)
+        ? '<div class="hi-stat"><span>Zakat paid</span><span>' + fmtCur(it.summary.zakatPaid, sym) + "</span></div>" : "";
+      return '<div class="history-item' + (it.auto ? " is-auto" : "") + '" data-id="' + it.id + '">' +
         '<button class="hi-del" data-del="' + it.id + '" title="Delete">✕</button>' +
-        '<div class="hi-label">' + escapeHtml(it.label) + "</div>" +
+        '<div class="hi-label">' + escapeHtml(it.label) + badge + "</div>" +
         '<div class="hi-date">' + d.toLocaleDateString() + " · " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "</div>" +
-        '<div class="hi-stat"><span>Final value</span><span>' + fmtCurrency(it.summary.finalBalance) + "</span></div>" +
-        '<div class="hi-stat"><span>Invested</span><span>' + fmtCurrency(it.summary.invested) + "</span></div>" +
+        '<div class="hi-stat"><span>Final value</span><span>' + fmtCur(it.summary.finalBalance, sym) + "</span></div>" +
+        '<div class="hi-stat"><span>Invested</span><span>' + fmtCur(it.summary.invested, sym) + "</span></div>" +
+        zRow +
         '<div class="hi-stat"><span>Lasts</span><span>' + escapeHtml(it.summary.lasts) + "</span></div>" +
         "</div>";
     }).join("");
@@ -501,8 +573,11 @@
     if (!it) return;
     Object.assign(state.growth, it.growth);
     Object.assign(state.withdrawal, it.withdrawal);
+    if (it.zakat) Object.assign(state.zakat, it.zakat);
     state.link = !!it.link;
-    render();
+    if (it.currency != null) { state.currency = it.currency; state.fxNote = ""; } // amounts are already in saved currency
+    lastSavedSig = scenarioSig();
+    applyCurrency(); renderZakatBar(); render();
     switchTab("combined");
     toast("Loaded “" + it.label + "”");
   }
@@ -537,6 +612,105 @@
       el.textContent = state.currency || "—";
       el.style.display = state.currency ? "" : "none";
     });
+    renderFxNote();
+  }
+
+  /* ----------------------- Zakat + FX controls -------------------------- */
+  function renderZakatBar() { renderZakatControls(); renderFxNote(); }
+  function renderZakatControls() {
+    var t = $("zakatToggle"); if (t) t.checked = state.zakat.enabled;
+    var r = $("zakatRate"); if (r) { if (document.activeElement !== r) r.value = state.zakat.rate; r.disabled = !state.zakat.enabled; }
+  }
+  function renderFxNote() {
+    var el = $("fxNote"); if (!el) return;
+    el.textContent = state.fxNote || "";
+    el.style.display = state.fxNote ? "" : "none";
+  }
+
+  // ---- live exchange rates (open.er-api.com, keyless, CORS-enabled) ----
+  function fxCacheGet(base) {
+    try {
+      var all = JSON.parse(localStorage.getItem(LS_FX) || "{}");
+      var e = all[base];
+      if (e && (Date.now() - e.t) < FX_TTL_MS) return e;
+    } catch (err) {}
+    return null;
+  }
+  function fxCacheSet(base, rates, updated) {
+    try {
+      var all = JSON.parse(localStorage.getItem(LS_FX) || "{}");
+      all[base] = { t: Date.now(), rates: rates, updated: updated };
+      localStorage.setItem(LS_FX, JSON.stringify(all));
+    } catch (err) {}
+  }
+  function fetchRates(base) {
+    var cached = fxCacheGet(base);
+    if (cached) return Promise.resolve(cached);
+    return fetch(FX_API + base).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.result !== "success" || !d.rates) throw new Error("fx failed");
+      fxCacheSet(base, d.rates, d.time_last_update_utc || "");
+      return { rates: d.rates, updated: d.time_last_update_utc || "" };
+    });
+  }
+  function fxDateLabel(utc) {
+    if (!utc) return "live rate";
+    var d = new Date(utc);
+    return isNaN(d.getTime()) ? "live rate" : "as of " + d.toLocaleDateString();
+  }
+  function convertAmounts(rate) {
+    function cv(v) { return Math.round(num(v) * rate * 100) / 100; }
+    state.growth.start = cv(state.growth.start);
+    state.growth.monthly = cv(state.growth.monthly);
+    state.withdrawal.monthly = cv(state.withdrawal.monthly);
+    if (!state.link) state.withdrawal.start = cv(state.withdrawal.start);
+  }
+  function changeCurrency(newSym) {
+    var oldSym = state.currency;
+    if (oldSym === newSym) return;
+    var oldISO = CURRENCY_ISO[oldSym], newISO = CURRENCY_ISO[newSym];
+    // Can only convert between two known ISO currencies; otherwise just swap the symbol.
+    if (!oldISO || !newISO || oldISO === newISO) {
+      state.currency = newSym;
+      if (!newISO) state.fxNote = "";
+      applyCurrency(); render();
+      return;
+    }
+    toast("Fetching " + oldISO + " → " + newISO + " rate…");
+    fetchRates(oldISO).then(function (res) {
+      var rate = res.rates[newISO];
+      if (!rate || !isFinite(rate)) throw new Error("no rate");
+      convertAmounts(rate);
+      state.currency = newSym;
+      state.fxNote = "1 " + oldISO + " = " + (rate < 0.1 ? rate.toFixed(6) : rate.toFixed(4)) + " " + newISO + "  ·  " + fxDateLabel(res.updated);
+      applyCurrency(); render();
+      lastSavedSig = scenarioSig(); // converted amounts shouldn't trigger an auto-save
+      toast("Converted " + oldISO + " → " + newISO);
+    }).catch(function () {
+      state.currency = newSym;
+      state.fxNote = "⚠ Live rate unavailable — amounts kept as-is";
+      applyCurrency(); render();
+      toast("Couldn't fetch rate — switched symbol only");
+    });
+  }
+
+  /* ----------------------------- Auto-save ------------------------------ */
+  function scenarioSig() {
+    return JSON.stringify({ g: state.growth, w: state.withdrawal, link: state.link, z: state.zakat });
+  }
+  var lastSavedSig = null;
+  var autoTimer;
+  function scheduleAutoSave() { clearTimeout(autoTimer); autoTimer = setTimeout(autoSave, AUTOSAVE_MS); }
+  function autoSave() {
+    var sig = scenarioSig();
+    if (sig === lastSavedSig) return;            // nothing meaningful changed
+    var h = getHistory().filter(function (x) { return !x.auto; }); // keep ONE rolling auto slot
+    h.unshift(buildScenario("Auto-saved", true));
+    setHistory(h); lastSavedSig = sig; renderHistory();
+    setAutoStatus("Auto-saved");
+  }
+  function setAutoStatus(txt) {
+    var el = $("autoStatus"); if (!el) return;
+    el.textContent = txt + " · " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
   var toastTimer;
@@ -553,6 +727,7 @@
     loadState();
     applyTheme();
     applyCurrency();
+    renderZakatBar();
     bindInputs();
     syncInputs();
 
@@ -565,8 +740,15 @@
       applyTheme(); render();
     });
     $("currencySelect").addEventListener("change", function () {
-      state.currency = $("currencySelect").value;
-      applyCurrency(); render();
+      changeCurrency($("currencySelect").value);
+    });
+    $("zakatToggle").addEventListener("change", function () {
+      state.zakat.enabled = this.checked;
+      renderZakatBar(); render();
+    });
+    $("zakatRate").addEventListener("input", function () {
+      state.zakat.rate = num(this.value);
+      render();
     });
 
     $("saveBtn").addEventListener("click", saveScenario);
@@ -583,7 +765,7 @@
       var blob = new Blob([JSON.stringify(getHistory(), null, 2)], { type: "application/json" });
       var a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "compound-calculator-history.json";
+      a.download = "fire-calculator-history.json";
       a.click();
       URL.revokeObjectURL(a.href);
     });
@@ -613,6 +795,7 @@
 
     switchTab(state.tab || "combined");
     render();
+    lastSavedSig = scenarioSig(); // baseline: don't auto-save the just-loaded state
   }
 
   if (typeof document !== "undefined") {
