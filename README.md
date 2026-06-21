@@ -1,5 +1,7 @@
 # 📈 FIRE Calculator — Compound Growth & Withdrawal
 
+**🚀 [Live Demo](https://goharanwar.github.io/fire-calculator/)**
+
 A custom, self-contained financial calculator that shows **accumulation (growth)**
 and **decumulation (withdrawal)** *at the same time* — so you can answer the two
 questions that actually matter together:
