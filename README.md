@@ -1,6 +1,6 @@
 # 📈 FIRE Calculator — Compound Growth & Withdrawal
 
-**🚀 [Live Demo](https://goharanwar.github.io/fire-calculator/)**
+**🚀 [Live Demo](https://goharanwar.github.io/fire-calculator/)** · installable on phone & desktop (PWA)
 
 A custom, self-contained financial calculator that shows **accumulation (growth)**
 and **decumulation (withdrawal)** *at the same time* — so you can answer the two
@@ -14,6 +14,7 @@ result** (toggleable), which is the whole point of this tool.
 
 No frameworks, no build step, no servers, no tracking. One HTML file + one CSS
 file + one JS file. Everything runs in your browser and saves to local storage.
+Installable as an offline app on phone & desktop.
 
 ---
 
@@ -33,6 +34,15 @@ file + one JS file. Everything runs in your browser and saves to local storage.
   **how long the money lasts** (or that it never depletes), total withdrawn, and
   a year-by-year drawdown table. Open-ended (never-depleting) runs are shown over
   a 40-year horizon.
+- **🛟 Max safe withdrawal** — for whatever corpus you have, it solves (binary
+  search) the **largest initial monthly withdrawal that never depletes** the
+  corpus — accounting for your withdrawal step-up and Zakat. Shown on the
+  Withdrawal tab and the Combined view, so you instantly see "what can I safely
+  draw forever?"
+- **💧 Emergency / low-risk fund** — model a **second pot** (e.g. a money-market
+  emergency fund) with its **own lower return**, grown in parallel for the same
+  years. It's added to your total corpus (and, when linked, feeds the withdrawal
+  phase), so you see total wealth and how long it lasts.
 - **🕌 Zakat** — optional **2.5 % annual deduction** (rate editable) taken from the
   balance at each year-end, in both phases. Total Zakat paid is shown per phase so
   you can see its drag on growth and on how long the corpus lasts.
@@ -48,6 +58,9 @@ file + one JS file. Everything runs in your browser and saves to local storage.
 - **🕘 History** — saved scenarios live in local storage. Click to reload, delete
   individual entries, or **export / import** the whole history as JSON to move it
   between devices.
+- **📲 Installable (PWA)** — works offline and installs to your home screen /
+  desktop. On Android/desktop Chrome use the **Install app** button (top-right) or
+  the browser's install prompt; on iPhone use **Share → Add to Home Screen**.
 - **Quality-of-life** — light/dark theme, Indian-style short forms (K / L / Cr),
   inputs remembered between visits, fully responsive for phone & desktop.
 
@@ -75,9 +88,18 @@ formula, so step-ups and timing behave correctly.
 **Zakat** (when enabled): at each year-end, `balance −= balance × rate%` (default
 2.5 %), applied after that year's contributions/withdrawals, in both phases.
 
+**Emergency fund** (when enabled): a parallel pot run through the same monthly
+growth engine at its own return (no step-up), then added to the total corpus.
+
+**Max safe withdrawal:** a binary search for the largest initial monthly
+withdrawal whose drawdown still survives the full 100-year horizon — using the
+*exact* same month-by-month engine as the withdrawal sim, so the answer always
+agrees with the "Never depletes" indicator.
+
 These engines are unit-tested against the standard compound-interest and
-ordinary/annuity-due future-value formulas, plus Zakat and horizon behaviour —
-see `test.js`.
+ordinary/annuity-due future-value formulas, plus Zakat, the safe-withdrawal
+solver (incl. cross-checks against the withdrawal engine), and horizon behaviour
+— see `test.js` (24 assertions).
 
 ```bash
 npm test        # runs the engine sanity tests under Node
@@ -121,11 +143,14 @@ Point it at the repo with **no build command** and an output directory of `.`.
 
 ## Files
 
-| File           | Purpose                                             |
-| -------------- | --------------------------------------------------- |
-| `index.html`   | Markup and layout for all four tabs                 |
-| `styles.css`   | Theme, layout, light/dark variables                 |
-| `app.js`       | Financial engines, canvas charts, state, history    |
-| `test.js`      | Node unit tests for the financial engines           |
-| `serve.js`     | Dependency-free local static server                 |
-| `netlify.toml` | Netlify deploy config                               |
+| File                    | Purpose                                                   |
+| ----------------------- | --------------------------------------------------------- |
+| `index.html`            | Markup and layout for all four tabs                       |
+| `styles.css`            | Theme, layout, light/dark variables                       |
+| `app.js`                | Financial engines, safe-withdrawal solver, charts, state  |
+| `test.js`               | Node unit tests for the financial engines (24 assertions) |
+| `serve.js`              | Dependency-free local static server                       |
+| `manifest.webmanifest`  | PWA manifest (installable app metadata)                   |
+| `sw.js`                 | Service worker — offline app shell + cache                |
+| `icons/`                | App icons (192 / 512 / maskable)                          |
+| `netlify.toml`          | Netlify deploy config                                     |

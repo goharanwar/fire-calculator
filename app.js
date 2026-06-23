@@ -21,6 +21,8 @@
   var state = {
     growth: { start: 100000, monthly: 10000, stepup: 10, rate: 15, years: 20, timing: "end" },
     withdrawal: { start: 0, monthly: 50000, stepup: 7, rate: 10, timing: "end" },
+    // Optional low-risk pot (e.g. money-market emergency fund) grown in parallel.
+    emergency: { enabled: false, start: 0, monthly: 0, rate: 6 },
     link: true,                       // withdrawal corpus follows growth result
     zakat: { enabled: true, rate: 2.5 }, // annual 2.5% wealth deduction at year-end
     currency: "Rs",
@@ -45,7 +47,13 @@
     ["rate", ["w_rate", "cw_rate"]],
     ["timing", ["w_timing"]],
   ];
+  var EMERGENCY_MAP = [
+    ["start", ["ef_start", "cef_start"]],
+    ["monthly", ["ef_monthly", "cef_monthly"]],
+    ["rate", ["ef_rate", "cef_rate"]],
+  ];
   var LINK_IDS = ["w_link", "cw_link"];
+  var EF_ENABLE_IDS = ["ef_enabled", "cef_enabled"];
 
   /* --------------------------- Utilities -------------------------------- */
   function $(id) { return document.getElementById(id); }
@@ -197,6 +205,46 @@
     };
   }
 
+  // Does `corpus` survive the full horizon (≈ perpetual) under this plan?
+  // Mirrors computeWithdrawal's month order exactly so results stay consistent.
+  function lastsForever(corpus, monthly, rate, stepup, zr, timing) {
+    if (corpus <= 0) return monthly <= 0;
+    var i = rate / 100 / 12;
+    var bal = corpus;
+    for (var m = 1; m <= MONTHS_CAP; m++) {
+      var wd = monthly * Math.pow(1 + stepup / 100, Math.floor((m - 1) / 12));
+      if (timing === "begin") bal = (bal - wd) * (1 + i);
+      else bal = bal * (1 + i) - wd;
+      if (zr && m % 12 === 0 && bal > 0) bal -= bal * zr;
+      if (bal <= 0) return false;
+    }
+    return true;
+  }
+
+  // Largest INITIAL monthly withdrawal that keeps `corpus` from ever depleting
+  // (the withdrawal itself still rises by `stepup` each year). Binary search.
+  function safeMonthlyWithdrawal(corpus, rate, stepup, zr, timing) {
+    if (!(corpus > 0)) return 0;
+    if (!lastsForever(corpus, 0, rate, stepup, zr, timing)) return 0; // even 0 bleeds out
+    var lo = 0, hi = Math.max(1, corpus * (rate / 100 / 12) + 1), guard = 0;
+    while (lastsForever(corpus, hi, rate, stepup, zr, timing) && guard < 80) { hi *= 1.6; guard++; }
+    for (var k = 0; k < 50; k++) {
+      var mid = (lo + hi) / 2;
+      if (lastsForever(corpus, mid, rate, stepup, zr, timing)) lo = mid; else hi = mid;
+    }
+    return lo;
+  }
+
+  // Emergency / low-risk fund expressed as a growth pot (no step-up by default),
+  // grown for the same horizon and timing as the main growth phase.
+  function emergencyAsGrowth() {
+    return {
+      start: state.emergency.start, monthly: state.emergency.monthly,
+      stepup: 0, rate: state.emergency.rate,
+      years: state.growth.years, timing: state.growth.timing,
+    };
+  }
+
   function hexA(color, a) {
     // accepts hex or rgb/var-resolved; build rgba
     var c = color.trim();
@@ -225,25 +273,43 @@
   function render() {
     var g = computeGrowth(state.growth, state.zakat);
 
-    // link: withdrawal corpus follows growth final value
-    if (state.link) state.withdrawal.start = g.finalBalance;
+    // Emergency / low-risk pot grown in parallel (optional).
+    var efOn = state.emergency.enabled;
+    var e = efOn ? computeGrowth(emergencyAsGrowth(), state.zakat) : null;
+    var totalFinal = g.finalBalance + (e ? e.finalBalance : 0);
+    var totalInvested = g.totalInvested + (e ? e.totalInvested : 0);
+    var totalProfit = totalFinal - totalInvested;
+    var totalZakat = g.zakatPaid + (e ? e.zakatPaid : 0);
+    // Accumulation series shown on charts (sum of both pots when EF is on).
+    var accSeries = e ? g.series.map(function (v, idx) { return v + (e.series[idx] || 0); }) : g.series;
+    var accLabel = efOn ? "Total portfolio (incl. emergency)" : "Portfolio value";
+
+    // link: withdrawal corpus follows the TOTAL growth result (rounded for a tidy field)
+    if (state.link) state.withdrawal.start = Math.round(totalFinal);
     var w = computeWithdrawal(state.withdrawal, state.zakat);
 
     var GC = cssVar("--growth"), WC = cssVar("--withdraw");
-    var zOn = state.zakat.enabled;
+    var zOn = state.zakat.enabled, zr = zakatRate(state.zakat);
     var zPct = trim(num(state.zakat.rate));
+
+    // Max sustainable monthly withdrawal for the current corpus.
+    var safe = safeMonthlyWithdrawal(w.startBalance, state.withdrawal.rate, state.withdrawal.stepup, zr, state.withdrawal.timing);
+    var safeSub = num(state.withdrawal.stepup) > 0 ? "rising " + trim(num(state.withdrawal.stepup)) + "%/yr, corpus never depletes" : "corpus never depletes";
+    var safeImpossible = w.startBalance > 0 && safe < 1;
+    if (safeImpossible) safeSub = "withdrawals rise ≥ your " + trim(num(state.withdrawal.rate)) + "% return";
 
     /* ---- Growth panel ---- */
     var gStats =
-      statBox("Final value", fmtCurrency(g.finalBalance), wordsHint(g.finalBalance), "big growth") +
-      statBox("Total invested", fmtCurrency(g.totalInvested), null, "") +
-      statBox("Total profit", fmtCurrency(g.totalProfit), g.totalInvested ? "+" + Math.round((g.totalProfit / g.totalInvested) * 100) + "% on capital" : "", "growth");
-    if (zOn) gStats += statBox("Zakat paid (" + zPct + "%)", fmtCurrency(g.zakatPaid), "deducted each year-end", "zakat");
+      statBox("Final value", fmtCurrency(totalFinal), wordsHint(totalFinal), "big growth") +
+      statBox("Total invested", fmtCurrency(totalInvested), null, "") +
+      statBox("Total profit", fmtCurrency(totalProfit), totalInvested ? "+" + Math.round((totalProfit / totalInvested) * 100) + "% on capital" : "", "growth");
+    if (efOn) gStats += statBox("Emergency fund", fmtCurrency(e.finalBalance), "@ " + trim(num(state.emergency.rate)) + "% · part of total", "");
+    if (zOn) gStats += statBox("Zakat paid (" + zPct + "%)", fmtCurrency(totalZakat), "deducted each year-end", "zakat");
     $("g_stats").innerHTML = gStats;
     drawChart($("g_chart"),
-      [{ values: g.series, color: GC, fill: true }],
+      [{ values: accSeries, color: GC, fill: true }],
       { totalYears: state.growth.years });
-    $("g_legend").innerHTML = legendHTML([{ color: GC, label: "Portfolio value" }]);
+    $("g_legend").innerHTML = legendHTML([{ color: GC, label: accLabel }]);
     renderGrowthTable(g);
 
     /* ---- Withdrawal panel ---- */
@@ -253,10 +319,10 @@
     var lastsSub = w.sustainable ? "Returns out-pace withdrawals at this rate" : "until the corpus hits zero";
     var wStats =
       statBox("Money lasts", lastsValue, lastsSub, "big " + (w.sustainable ? "ok" : "warn")) +
+      statBox("🛟 Max safe / mo", safe >= 1 ? fmtCurrency(safe) : fmtCurrency(0), safeSub, "ok") +
       statBox("Starting corpus", fmtCurrency(w.startBalance), state.link ? "linked from Growth" : "manual", "") +
       statBox("Total withdrawn", fmtCurrency(w.totalWithdrawn), null, "withdraw");
     if (zOn) wStats += statBox("Zakat paid (" + zPct + "%)", fmtCurrency(w.zakatPaid), w.sustainable ? "over " + SUSTAIN_DISPLAY_YEARS + "y shown" : "until depletion", "zakat");
-    else wStats += statBox("First-year withdrawal", fmtCurrency(num(state.withdrawal.monthly) * 12), null, "");
     $("w_stats").innerHTML = wStats;
     drawChart($("w_chart"),
       [{ values: w.displaySeries, color: WC, fill: true }],
@@ -266,22 +332,25 @@
 
     /* ---- Combined panel ---- */
     if ($("cw_start")) $("cw_start").disabled = state.link;
-    var zNote = zOn ? '<div class="mini-row"><span>Zakat paid</span><b>' : "";
+    syncEmergencyVisibility();
 
     $("cg_mini").className = "card mini-result growth";
     $("cg_mini").innerHTML =
       '<div class="mini-title">After ' + trim(state.growth.years) + " years you have</div>" +
-      '<div class="mini-main">' + fmtCurrency(g.finalBalance) + "</div>" +
-      '<div class="mini-sub">' + wordsHint(g.finalBalance) + "</div>" +
-      '<div class="mini-row"><span>Invested</span><b>' + fmtAbbrev(g.totalInvested) + "</b></div>" +
-      '<div class="mini-row"><span>Profit</span><b>' + fmtAbbrev(g.totalProfit) + "</b></div>" +
-      (zOn ? '<div class="mini-row"><span>Zakat paid</span><b>' + fmtAbbrev(g.zakatPaid) + "</b></div>" : "");
+      '<div class="mini-main">' + fmtCurrency(totalFinal) + "</div>" +
+      '<div class="mini-sub">' + wordsHint(totalFinal) + "</div>" +
+      '<div class="mini-row"><span>Invested</span><b>' + fmtAbbrev(totalInvested) + "</b></div>" +
+      '<div class="mini-row"><span>Profit</span><b>' + fmtAbbrev(totalProfit) + "</b></div>" +
+      (efOn ? '<div class="mini-row"><span>Emergency fund</span><b>' + fmtAbbrev(e.finalBalance) + "</b></div>" : "") +
+      (zOn ? '<div class="mini-row"><span>Zakat paid</span><b>' + fmtAbbrev(totalZakat) + "</b></div>" : "");
 
+    var corpusSub = w.startBalance > 0 ? "from " + abbrevCur(w.startBalance) + " corpus" : "";
     $("cw_mini").className = "card mini-result withdraw";
     $("cw_mini").innerHTML =
       '<div class="mini-title">Drawing ' + fmtCurrency(num(state.withdrawal.monthly)) + "/mo, it lasts</div>" +
       '<div class="mini-main">' + lastsValue + "</div>" +
-      '<div class="mini-sub">from ' + wordsHint(w.startBalance).replace("≈ ", "") + " corpus</div>" +
+      '<div class="mini-sub">' + corpusSub + "</div>" +
+      '<div class="mini-row"><span>🛟 Max safe / mo</span><b>' + (safe >= 1 ? fmtAbbrev(safe) : fmtCurrency(0)) + "</b></div>" +
       '<div class="mini-row"><span>From corpus</span><b>' + fmtAbbrev(w.startBalance) + "</b></div>" +
       '<div class="mini-row"><span>Total drawn</span><b>' + fmtAbbrev(w.totalWithdrawn) + "</b></div>" +
       (zOn ? '<div class="mini-row"><span>Zakat paid</span><b>' + fmtAbbrev(w.zakatPaid) + "</b></div>" : "");
@@ -289,9 +358,9 @@
     // Two separate charts (accumulation + drawdown), each self-scaled, so a
     // never-depleting or very-long drawdown can't squash the growth phase.
     drawChart($("c_chart_growth"),
-      [{ values: g.series, color: GC, fill: true }],
+      [{ values: accSeries, color: GC, fill: true }],
       { totalYears: state.growth.years });
-    $("cg_chart_legend").innerHTML = legendHTML([{ color: GC, label: "Portfolio value" }]);
+    $("cg_chart_legend").innerHTML = legendHTML([{ color: GC, label: accLabel }]);
 
     drawChart($("c_chart_withdraw"),
       [{ values: w.displaySeries, color: WC, fill: true }],
@@ -302,6 +371,16 @@
     syncInputs();
     saveState();
     scheduleAutoSave();
+  }
+
+  // "Rs 2.16 Cr" style label (no leading ≈).
+  function abbrevCur(n) { return (state.currency ? state.currency + " " : "") + abbrev(n); }
+
+  // Show/hide the emergency-fund detail fields based on the toggle.
+  function syncEmergencyVisibility() {
+    var on = state.emergency.enabled;
+    document.querySelectorAll(".ef-fields").forEach(function (el) { el.classList.toggle("hidden", !on); });
+    EF_ENABLE_IDS.forEach(function (id) { var el = $(id); if (el) el.checked = on; });
   }
 
   /* -------------------------- Canvas charts ----------------------------- */
@@ -431,7 +510,11 @@
     WITHDRAWAL_MAP.forEach(function (entry) {
       entry[1].forEach(function (id) { setVal(id, state.withdrawal[entry[0]]); });
     });
+    EMERGENCY_MAP.forEach(function (entry) {
+      entry[1].forEach(function (id) { setVal(id, state.emergency[entry[0]]); });
+    });
     LINK_IDS.forEach(function (id) { var el = $(id); if (el) el.checked = state.link; });
+    EF_ENABLE_IDS.forEach(function (id) { var el = $(id); if (el) el.checked = state.emergency.enabled; });
 
     // hint words — individual tabs and combined view
     setHint("g_start_words", state.growth.start);
@@ -442,6 +525,8 @@
     setHint("cg_monthly_words", state.growth.monthly);
     setHint("cw_start_words", state.withdrawal.start);
     setHint("cw_monthly_words", state.withdrawal.monthly);
+    setHint("ef_start_words", state.emergency.start);
+    setHint("cef_start_words", state.emergency.start);
   }
   function setHint(id, v) { var el = $(id); if (el) el.textContent = wordsHint(num(v)); }
 
@@ -467,10 +552,27 @@
         });
       });
     });
+    EMERGENCY_MAP.forEach(function (entry) {
+      var key = entry[0];
+      entry[1].forEach(function (id) {
+        var el = $(id); if (!el) return;
+        el.addEventListener("input", function () {
+          state.emergency[key] = num(el.value);
+          render();
+        });
+      });
+    });
     LINK_IDS.forEach(function (id) {
       var el = $(id); if (!el) return;
       el.addEventListener("change", function () {
         state.link = el.checked;
+        render();
+      });
+    });
+    EF_ENABLE_IDS.forEach(function (id) {
+      var el = $(id); if (!el) return;
+      el.addEventListener("change", function () {
+        state.emergency.enabled = el.checked;
         render();
       });
     });
@@ -487,6 +589,7 @@
       var s = JSON.parse(raw);
       if (s.growth) Object.assign(state.growth, s.growth);
       if (s.withdrawal) Object.assign(state.withdrawal, s.withdrawal);
+      if (s.emergency) Object.assign(state.emergency, s.emergency);
       if (typeof s.link === "boolean") state.link = s.link;
       if (s.zakat) Object.assign(state.zakat, s.zakat);
       if (s.currency != null) state.currency = s.currency;
@@ -512,7 +615,9 @@
   }
   function buildScenario(label, auto) {
     var g = computeGrowth(state.growth, state.zakat);
-    if (state.link) state.withdrawal.start = g.finalBalance;
+    var e = state.emergency.enabled ? computeGrowth(emergencyAsGrowth(), state.zakat) : null;
+    var totalFinal = g.finalBalance + (e ? e.finalBalance : 0);
+    if (state.link) state.withdrawal.start = Math.round(totalFinal);
     var w = computeWithdrawal(state.withdrawal, state.zakat);
     return {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -522,12 +627,13 @@
       currency: state.currency,
       growth: Object.assign({}, state.growth),
       withdrawal: Object.assign({}, state.withdrawal),
+      emergency: Object.assign({}, state.emergency),
       zakat: Object.assign({}, state.zakat),
       link: state.link,
       summary: {
-        finalBalance: g.finalBalance,
-        invested: g.totalInvested,
-        zakatPaid: g.zakatPaid + w.zakatPaid,
+        finalBalance: totalFinal,
+        invested: g.totalInvested + (e ? e.totalInvested : 0),
+        zakatPaid: g.zakatPaid + (e ? e.zakatPaid : 0) + w.zakatPaid,
         lasts: w.sustainable ? "Never depletes" : monthsToText(w.lastsMonths),
       },
     };
@@ -577,6 +683,7 @@
     if (!it) return;
     Object.assign(state.growth, it.growth);
     Object.assign(state.withdrawal, it.withdrawal);
+    if (it.emergency) Object.assign(state.emergency, it.emergency);
     if (it.zakat) Object.assign(state.zakat, it.zakat);
     state.link = !!it.link;
     if (it.currency != null) { state.currency = it.currency; state.fxNote = ""; } // amounts are already in saved currency
@@ -667,6 +774,8 @@
     state.growth.monthly = cv(state.growth.monthly);
     state.withdrawal.monthly = cv(state.withdrawal.monthly);
     if (!state.link) state.withdrawal.start = cv(state.withdrawal.start);
+    state.emergency.start = cv(state.emergency.start);
+    state.emergency.monthly = cv(state.emergency.monthly);
   }
   function changeCurrency(newSym) {
     var oldSym = state.currency;
@@ -699,7 +808,7 @@
 
   /* ----------------------------- Auto-save ------------------------------ */
   function scenarioSig() {
-    return JSON.stringify({ g: state.growth, w: state.withdrawal, link: state.link, z: state.zakat });
+    return JSON.stringify({ g: state.growth, w: state.withdrawal, ef: state.emergency, link: state.link, z: state.zakat });
   }
   var lastSavedSig = null;
   var autoTimer;
@@ -797,9 +906,33 @@
       resizeTimer = setTimeout(render, 120);
     });
 
+    setupPwa();
+
     switchTab(state.tab || "combined");
     render();
     lastSavedSig = scenarioSig(); // baseline: don't auto-save the just-loaded state
+  }
+
+  /* ------------------------------- PWA ---------------------------------- */
+  function setupPwa() {
+    // Register the service worker for offline use + installability.
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").catch(function () {});
+    }
+    // Custom install button (Android/desktop). iOS uses Share → Add to Home Screen.
+    var deferred = null;
+    var btn = $("installBtn");
+    window.addEventListener("beforeinstallprompt", function (ev) {
+      ev.preventDefault();
+      deferred = ev;
+      if (btn) btn.hidden = false;
+    });
+    if (btn) btn.addEventListener("click", function () {
+      if (!deferred) { toast("On iPhone: Share → Add to Home Screen"); return; }
+      deferred.prompt();
+      deferred.userChoice.then(function () { deferred = null; btn.hidden = true; });
+    });
+    window.addEventListener("appinstalled", function () { if (btn) btn.hidden = true; });
   }
 
   if (typeof document !== "undefined") {
@@ -809,6 +942,9 @@
 
   // Exposed for unit testing under Node; no effect in the browser.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { computeGrowth: computeGrowth, computeWithdrawal: computeWithdrawal, abbrev: abbrev };
+    module.exports = {
+      computeGrowth: computeGrowth, computeWithdrawal: computeWithdrawal,
+      safeMonthlyWithdrawal: safeMonthlyWithdrawal, lastsForever: lastsForever, abbrev: abbrev,
+    };
   }
 })();

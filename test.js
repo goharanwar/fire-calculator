@@ -2,6 +2,8 @@
 var engine = require("./app.js");
 var computeGrowth = engine.computeGrowth;
 var computeWithdrawal = engine.computeWithdrawal;
+var safeMonthlyWithdrawal = engine.safeMonthlyWithdrawal;
+var lastsForever = engine.lastsForever;
 
 function approx(a, b, tol) { return Math.abs(a - b) <= tol; }
 var pass = 0, fail = 0;
@@ -53,6 +55,27 @@ t("Zakat lowers final balance", gZ.finalBalance < gNoZ.finalBalance && gZ.zakatP
 var wNoZ = computeWithdrawal({ start: 1000000, monthly: 6000, stepup: 0, rate: 6, timing: "end" });
 var wZ = computeWithdrawal({ start: 1000000, monthly: 6000, stepup: 0, rate: 6, timing: "end" }, { enabled: true, rate: 2.5 });
 t("Zakat shortens how long money lasts", wZ.lastsMonths < wNoZ.lastsMonths);
+
+// 9) Safe withdrawal ≈ monthly interest when there's no step-up/Zakat (C × i).
+var corpus = 10000000, monthlyRate = 0.10 / 12;
+var safe = safeMonthlyWithdrawal(corpus, 10, 0, 0, "end");
+t("safe ≈ corpus × monthly rate", approx(safe, corpus * monthlyRate, corpus * monthlyRate * 0.06), "got " + Math.round(safe));
+t("withdrawing the safe amount is sustainable", lastsForever(corpus, safe, 10, 0, 0, "end") === true);
+t("5% above safe depletes", lastsForever(corpus, safe * 1.05, 10, 0, 0, "end") === false);
+
+// 10) The solver agrees with the main withdrawal engine.
+var safe2 = safeMonthlyWithdrawal(corpus, 10, 5, 0, "end");
+t("solver result is sustainable in computeWithdrawal",
+  computeWithdrawal({ start: corpus, monthly: safe2, stepup: 5, rate: 10, timing: "end" }).sustainable === true);
+t("10% above solver result is not sustainable",
+  computeWithdrawal({ start: corpus, monthly: safe2 * 1.1, stepup: 5, rate: 10, timing: "end" }).sustainable === false);
+
+// 11) Step-up and Zakat each lower the safe amount.
+t("withdrawal step-up lowers safe amount", safeMonthlyWithdrawal(corpus, 10, 8, 0, "end") < safe);
+t("Zakat lowers safe amount", safeMonthlyWithdrawal(corpus, 10, 0, 0.025, "end") < safe);
+
+// 12) No corpus → no safe withdrawal.
+t("zero corpus yields zero safe withdrawal", safeMonthlyWithdrawal(0, 10, 0, 0, "end") === 0);
 
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

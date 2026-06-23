@@ -4,9 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0f766e" />
-  <meta name="description" content="Custom compound growth & withdrawal calculator with linked phases and history." />
+  <meta name="description" content="Compound growth & withdrawal (FIRE) calculator with Zakat, an emergency-fund pot, a safe-withdrawal solver, live currency conversion, and history." />
   <title>FIRE Calculator — Compound Growth &amp; Withdrawal</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FIRE Calc" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -31,6 +37,7 @@
         </select>
         <small class="fx-note" id="fxNote"></small>
       </label>
+      <button id="installBtn" class="ghost install-btn" hidden>⬇ Install app</button>
       <button id="themeToggle" class="icon-btn" title="Toggle dark / light" aria-label="Toggle theme">🌙</button>
     </div>
   </header>
@@ -88,6 +95,29 @@
               <option value="end" selected>End of month (ordinary)</option>
               <option value="begin">Start of month (annuity-due)</option>
             </select>
+          </div>
+
+          <div class="ef-block">
+            <label class="ef-head">
+              <span class="switch sm"><input type="checkbox" id="ef_enabled" /><span class="slider"></span></span>
+              <span>💧 Emergency / low-risk fund</span>
+            </label>
+            <p class="ef-note">A separate pot (e.g. money-market) grown at its own lower rate for the same years. Adds to your total corpus.</p>
+            <div class="ef-fields hidden">
+              <div class="field">
+                <label for="ef_start">Amount parked now</label>
+                <div class="input-wrap"><span class="prefix curr">Rs</span><input id="ef_start" type="number" min="0" step="any" value="0" /></div>
+                <small class="hint" id="ef_start_words"></small>
+              </div>
+              <div class="field">
+                <label for="ef_monthly">Monthly addition</label>
+                <div class="input-wrap"><span class="prefix curr">Rs</span><input id="ef_monthly" type="number" min="0" step="any" value="0" /></div>
+              </div>
+              <div class="field">
+                <label for="ef_rate">Low-risk annual return</label>
+                <div class="input-wrap"><input id="ef_rate" type="number" step="any" value="6" /><span class="suffix">%</span></div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -200,6 +230,29 @@
             <div class="field-row">
               <label for="cg_years">Years</label>
               <div class="input-wrap"><input id="cg_years" type="number" min="0" step="any" /><span class="suffix">yrs</span></div>
+            </div>
+            <div class="ef-block">
+              <label class="ef-head">
+                <span class="switch sm"><input type="checkbox" id="cef_enabled" /><span class="slider"></span></span>
+                <span>💧 Emergency / low-risk fund</span>
+              </label>
+              <div class="ef-fields hidden">
+                <div class="field-row">
+                  <label for="cef_start">Amount parked</label>
+                  <div class="field-col2">
+                    <div class="input-wrap"><span class="prefix curr">Rs</span><input id="cef_start" type="number" min="0" step="any" /></div>
+                    <small class="hint" id="cef_start_words"></small>
+                  </div>
+                </div>
+                <div class="field-row">
+                  <label for="cef_monthly">Monthly addition</label>
+                  <div class="input-wrap"><span class="prefix curr">Rs</span><input id="cef_monthly" type="number" min="0" step="any" /></div>
+                </div>
+                <div class="field-row">
+                  <label for="cef_rate">Low-risk return</label>
+                  <div class="input-wrap"><input id="cef_rate" type="number" step="any" /><span class="suffix">%</span></div>
+                </div>
+              </div>
             </div>
           </div>
           <div class="card mini-result" id="cg_mini"></div>
